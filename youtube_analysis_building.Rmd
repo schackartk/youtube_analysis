@@ -1,0 +1,87 @@
+---
+title: "Designing a Personal YouTube Data Analysis Script"
+author: "Kschackart"
+output: html_document
+---
+
+# YouTube Data Analysis
+
+## Importing and Putting Data into a Tibble
+
+First, the data is downloaded from Google Takeout. The one I am interested in is the Youtube watch history. Let's take a look at the first few lines of the file to see how it is structured.
+
+```{R, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(jsonlite)
+
+# Import data
+raw_watch_history <- fromJSON("Takeout_2/YouTube/history/watch-history.json")
+
+# Begin to tidy the data & delete uninformative columns
+watch_history <- raw_watch_history %>% 
+  as_tibble() %>% flatten() %>% as_tibble()
+
+# View the data
+head(watch_history)
+```
+
+## Cleaning the Data
+
+I can tell right away that there are columns that I don't care about, so let's just deselect them.
+
+```{R, warning=FALSE, message=FALSE}
+# Get rid of columns that don't have useful information
+(watch_history <- watch_history %>% select(-description, -products, -header))
+```
+
+The first easy fix for the values is to get rid of the string "Watched " before each video.
+
+```{R, warning=FALSE, message=FALSE}
+# Clean song title strings 
+watch_history$title <- watch_history$title %>% 
+  gsub(pattern = "Watched ", replacement = "")
+```
+
+Next, is to manipulate the time data so that R actually interprets it as time.
+
+```{R, warning=FALSE, message=FALSE}
+library(lubridate)
+
+# Fix time formatting and data type
+watch_history$time <- watch_history$time %>% 
+  gsub(pattern = "T", replacement = " ")  %>% 
+  gsub(pattern = "Z", replacement = "") %>% ymd_hms()
+```
+
+OK, let's see how we are looking now
+```{R, warning=FALSE, message=FALSE}
+# View the data
+head(watch_history)
+```
+
+The next challenge is the ugly nested nature of the column `subtitles`. There are actually two distinct cases of what is contained within the `subtitles` column. The first occurs when I first open the YouTube application, it enters in some metadata abuot environmental conditions to use for suggesting videos later. Let's look at one of those.
+```{R, warning=FALSE, message=FALSE}
+watch_history[[2]][[18]]
+```
+
+So, you can see that it has information on what it thinks I was doing while watching the video; in this case there are two activities, "Leisure" and "Standing still". It also has information on the weather at the time.
+
+The second case of the data contained in the subtitles column is once I have opened the YouTube application, and a video is playing, it contains information about the video.
+```{R, warning=FALSE, message=FALSE}
+watch_history[[2]][[6]]
+```
+
+All of these have two columns (`name` and `url`). The url is redundant with the column already present, but the name contains important information. If YouTube Music was used (which is nearly all of my data), then this is the artist. If it is an actual YouTube video, then this is the YouTube Channel name.
+
+It is harder to see this next point, but after looking at the raw JSON file in Notepad, I can see that the environmental parameters given in the first case apply to all of the video labels in the following rows. But, it is organized chonologically from bottom to top.
+
+What I would like to do is get those environmental parameters out of that column and add several new columns representing what environmental parameters are present:
+
+* `Activity`
+* `Temperature`
+* `Sun`
+* `Weather`
+
+Then, paste the values of those parameters into the corresponding rows to which they apply, then delete the rows that originally held the environmental data since those rows do not actually contain any videos. I can easily identify those rows because their value in the `title` column is always "Visited YouTube Music".
+
+As has already been noted, the `Activity` may include more than one (e.g. "Leisure" and "Standing still"), so that column should probably be of type `list` with string elements. Some rows will only have one value in that list.
